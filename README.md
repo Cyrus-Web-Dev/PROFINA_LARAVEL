@@ -1,5 +1,17 @@
 # PROFINA — Production · Marketing · Finance
 
+> **⚠️ DISCLAIMER — KERANGKA / SUITE MENTAH**
+>
+> **PROFINA** (portal Core, MKP/keuangan, SDM/HRIS, Payroll & Budgeting, Marketing & Sales) adalah **kerangka suite pengembangan**, **bukan** sistem yang siap produksi atau siap dipakai langsung di perusahaan / industri.
+>
+> - Jalankan sesuai petunjuk README (Core + tiap modul, SSO, database).
+> - Sebaiknya ditinjau oleh pihak yang paham proses HR, payroll, akuntansi, marketing, dan keamanan sistem.
+> - Kesesuaian alur antar-modul, perhitungan gaji/pajak, dan integrasi **bergantung evaluasi klien**.
+> - Keamanan, kepatuhan regulasi, dan kelengkapan fitur **belum** diklaim memadai untuk lingkungan produksi nyata.
+>
+> Saya sebagai developer menyediakan **fondasi / kerangka** multi-modul.  
+> Apakah sudah sesuai kebutuhan, aman, dan layak dilanjutkan — **keputusan dan tanggung jawab evaluasinya ada pada pengguna / klien**.
+
 **1 pintu masuk, 5 pintu tugas.** Semua orang login di satu tempat (Portal/Core). Setelah login, akun
 hanya diarahkan ke modul yang ditugaskan kepadanya. Akun dengan role Marketing tidak pernah melihat,
 apalagi bisa masuk, ke modul SDM/Keuangan, dan sebaliknya.
