@@ -1,0 +1,24 @@
+{
+    "name": "profina/sso-client",
+    "description": "Klien SSO PROFINA: setiap modul hanya bisa dimasuki lewat token bertanda tangan dari Portal (Core).",
+    "type": "library",
+    "version": "1.0.0",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.2",
+        "illuminate/support": "^11.0",
+        "spatie/laravel-permission": "^6.9"
+    },
+    "autoload": {
+        "psr-4": {
+            "Profina\\Sso\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Profina\\Sso\\SsoServiceProvider"
+            ]
+        }
+    }
+}

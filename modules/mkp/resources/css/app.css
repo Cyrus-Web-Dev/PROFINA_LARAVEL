@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Warna dasar untuk seluruh halaman. Tanpa ini teks yang tidak diberi kelas warna
+     (mis. tanggal, nominal di kartu) tetap hitam di mode gelap -> tidak terbaca. */
+  body {
+    @apply bg-slate-50 text-slate-800;
+  }
+  html.dark body {
+    @apply bg-slate-950 text-slate-200;
+  }
+
+  /* Input/select/textarea mengikuti tema */
+  html.dark input:not([type='checkbox']):not([type='radio']),
+  html.dark select,
+  html.dark textarea {
+    @apply bg-slate-900 text-slate-100 border-slate-700 placeholder-slate-500;
+  }
+  html.dark input:disabled,
+  html.dark select:disabled {
+    @apply bg-slate-800 text-slate-500;
+  }
+  html.dark table {
+    @apply text-slate-200;
+  }
+
+  /* Kolom angka: lebar digit sama supaya nominal rapi */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+[v-cloak] {
+  display: none;
+}

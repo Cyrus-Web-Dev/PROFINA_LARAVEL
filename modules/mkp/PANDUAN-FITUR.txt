@@ -1,0 +1,411 @@
+====================================================================
+DOKUMENTASI APLIKASI MKP (MANAJEMEN KEUANGAN PERUSAHAAN)
+====================================================================
+Dibuat dengan: Laravel 11 + Inertia.js + Vue 3 + Tailwind CSS
+Database: MySQL (rencana migrasi ke PostgreSQL)
+
+
+====================================================================
+PEMBARUAN v2 (hasil audit) - BACA INI DULU
+====================================================================
+Beberapa hal di dokumen ini berubah dibanding versi sebelumnya:
+- Pendaftaran terbuka, tetapi akun baru MENUNGGU PERSETUJUAN Manager
+  (lihat 2.12c). Pendaftar PERTAMA otomatis menjadi Manager.
+  Menutup pendaftaran: MKP_REGISTRATION=closed di .env.
+- Email sistem (OTP, reset password) bisa memakai credentials.json +
+  token.json (sama seperti proyek Inventaris) - lihat 1.4 di bawah.
+- Izin per role KINI ditegakkan di server (bukan hanya label).
+- Mode lokal: bila Gmail belum siap, kode OTP dicatat di storage/logs/laravel.log
+- Rincian lengkap perubahan & bug yang diperbaiki: AUDIT-MKP.md
+
+BAGIAN 1: ALUR MASUK APLIKASI (AUTENTIKASI + VERIFIKASI GMAIL API)
+====================================================================
+CATATAN: bagian ini sudah diperbarui - sistem Login/Register/Lupa Password
+TIDAK LAGI memakai Breeze polos, melainkan sistem custom dengan verifikasi
+kode via Gmail API (2 langkah untuk Login & Register).
+
+1.1 REGISTER (Daftar Akun Baru) - 2 tahap
+--------------------------------------------
+URL: /register lalu /register/verify
+Tahap 1: pengguna mengisi nama, email, password. Sistem TIDAK LANGSUNG
+membuat akun - data disimpan sementara di session, lalu kode verifikasi
+6 digit dikirim ke email lewat Gmail API.
+Tahap 2: pengguna memasukkan kode di halaman /register/verify. Kalau
+benar, BARU akun benar-benar dibuat di database, dan pengguna otomatis
+login. Kalau salah 5x, harus minta kode baru (tombol "Kirim Ulang Kode",
+ada jeda 60 detik antar permintaan).
+Kenapa begini? Supaya tidak ada akun "hantu" dengan email yang salah
+ketik/tidak dimiliki pendaftar - akun baru ada kalau email terbukti aktif.
+
+1.2 LOGIN - 2 tahap (2FA)
+-----------------------------
+URL: /login lalu /two-factor-challenge
+Tahap 1: pengguna masukkan email+password. Sistem cek kecocokan TANPA
+langsung membuka sesi login. Kalau benar, kode OTP 6 digit dikirim ke
+email terdaftar lewat Gmail API.
+Tahap 2: pengguna masukkan kode di halaman verifikasi. Kalau benar, BARU
+sesi login benar-benar dibuat. Maksimal 5x salah tebak kode sebelum harus
+minta kode baru.
+Percobaan login (email+password) dibatasi 5x per 15 menit per kombinasi
+email+alamat IP, untuk mencegah serangan tebak password (brute force).
+
+1.3 LUPA PASSWORD (Forgot Password)
+------------------------------------
+URL: /forgot-password
+Pengguna memasukkan email terdaftar. Sistem mengirim EMAIL lewat Gmail
+API berisi link reset password (token unik, berlaku 60 menit). Klik
+link → diarahkan ke halaman set password baru.
+
+1.4 GMAIL API - BAGAIMANA EMAIL SISTEM DIKIRIM
+------------------------------------------------------
+Semua email sistem (kode 2FA, kode verifikasi register, link reset
+password) dikirim lewat SATU akun Gmail. Kredensialnya dibaca dari:
+  1. storage/app/credentials/credentials.json + token.json
+     (paling mudah: salin dari proyek Inventaris)
+  2. Variabel .env GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN
+Tidak ada halaman pengaturan di aplikasi; langkah menyiapkannya ada di
+README (bagian "Menyiapkan Gmail API"). Untuk menguji dari terminal:
+  php artisan mkp:mail-test emailkamu@gmail.com
+Perintah itu menampilkan penyebab error yang sebenarnya (mis. token
+kedaluwarsa / invalid_grant). Kegagalan kirim email SELALU dilaporkan ke
+pengguna - tidak ada lagi "terkirim" palsu.
+
+1.5 LOGOUT
+----------
+Tombol Logout ada di pojok kiri bawah sidebar (bagian profil
+pengguna). Menghancurkan sesi login pengguna dan mengarahkan
+kembali ke halaman login.
+
+
+BAGIAN 2: PETA HALAMAN & FUNGSI TIAP MODUL
+====================================================================
+
+2.1 DASHBOARD (/dashboard)
+----------------------------
+Halaman ringkasan utama. Menampilkan:
+- 4 kartu KPI: Total Aset, Total Kewajiban, Total Ekuitas, Laba
+  Bersih tahun berjalan (YTD = Year to Date)
+- Grafik tren Pendapatan vs Beban 6 bulan terakhir
+- Daftar 6 jurnal terbaru + status masing-masing
+- Peringatan jika ada jurnal berstatus draft atau menunggu approval
+- Widget "Pengingat Jatuh Tempo": daftar invoice/bill yang sudah
+  lewat jatuh tempo atau akan jatuh tempo dalam 7 hari ke depan
+
+2.2 DAFTAR AKUN / CHART OF ACCOUNTS (/chart-of-accounts)
+------------------------------------------------------------
+Ini FONDASI seluruh sistem akuntansi. Setiap "akun" di sini mewakili
+satu pos dalam laporan keuangan (contoh: Kas, Piutang Usaha, Beban
+Gaji). Setiap akun punya:
+- Kode unik (contoh: 1-1100 untuk Kas)
+- Tipe: Aset / Kewajiban / Ekuitas / Pendapatan / Beban
+- Saldo Normal: Debit atau Kredit (menentukan arah penambahan saldo)
+- Status aktif/nonaktif
+- Tanda "Akun Kas/Bank" (dipakai di modul Kas & Bank dan saat
+  mencatat pembayaran)
+
+Bisa tambah, edit (nama/kategori/status - kode & tipe TIDAK BISA
+diubah setelah dibuat demi konsistensi), dan hapus (hanya jika akun
+belum pernah dipakai transaksi).
+
+2.3 JURNAL UMUM (/journals)
+------------------------------
+Tempat mencatat SETIAP transaksi keuangan secara manual memakai
+prinsip DOUBLE-ENTRY: setiap transaksi harus punya sisi Debit dan
+Kredit yang jumlahnya SAMA PERSIS.
+
+Alur status jurnal:
+  draft -> (posting) -> posted -> (void) -> void
+  draft -> (approval jika nilai besar) -> pending -> approved -> posted
+
+- DRAFT: jurnal baru dibuat, belum masuk buku besar, MASIH BISA
+  diedit atau dihapus.
+- PENDING APPROVAL: jika total jurnal >= Rp50.000.000 (bisa diatur
+  di config/mkp.php), wajib disetujui user berrole admin dulu
+  sebelum bisa diposting.
+- POSTED: sudah resmi masuk buku besar, TIDAK BISA diedit/dihapus
+  lagi. Kalau salah, harus di-VOID (dibatalkan dengan jurnal
+  pembalik otomatis - bukan dihapus, supaya jejak audit tetap utuh).
+- VOID: jurnal dibatalkan, tidak dihitung dalam laporan manapun.
+
+2.4 BUKU BESAR / GENERAL LEDGER (/ledger)
+----------------------------------------------
+Menampilkan seluruh mutasi (debit/kredit) SATU akun tertentu dalam
+rentang tanggal, lengkap dengan saldo berjalan (running balance).
+Ini adalah rekap otomatis dari semua Jurnal Umum yang sudah posted,
+dikelompokkan per akun.
+
+2.5 PIUTANG USAHA / ACCOUNTS RECEIVABLE (/invoices, /customers)
+--------------------------------------------------------------------
+Modul untuk mencatat penjualan ke pelanggan secara kredit (belum
+dibayar tunai).
+- Pelanggan (Customers): data master pelanggan
+- Invoice: tagihan ke pelanggan, bisa berisi beberapa item/baris.
+  Begitu disimpan, OTOMATIS membuat jurnal: Debit Piutang Usaha,
+  Kredit Pendapatan.
+- Pembayaran: saat pelanggan bayar, dicatat lewat tombol "Catat
+  Pembayaran" di halaman detail invoice. Otomatis membuat jurnal:
+  Debit Kas/Bank, Kredit Piutang Usaha.
+- Batalkan Invoice: hanya bisa dilakukan SEBELUM ada pembayaran
+  masuk. Membuat jurnal pembalik otomatis.
+
+2.6 UTANG USAHA / ACCOUNTS PAYABLE (/bills, /vendors)
+----------------------------------------------------------
+Kebalikan dari Piutang - mencatat pembelian dari vendor secara
+kredit (belum dibayar tunai).
+- Vendor: data master pemasok/vendor
+- Bill: tagihan dari vendor. Otomatis membuat jurnal: Debit
+  Beban/Aset, Kredit Utang Usaha.
+- Pembayaran ke vendor: Debit Utang Usaha, Kredit Kas/Bank.
+- Batalkan Bill: sama seperti invoice, hanya sebelum ada pembayaran.
+
+2.7 KAS & BANK (/cash-bank)
+-------------------------------
+Ringkasan saldo semua akun yang ditandai sebagai "Kas/Bank" di
+Chart of Accounts. Ada fitur Transfer antar akun (misal: setor
+tunai dari Kas ke rekening Bank) yang otomatis membuat jurnal.
+
+2.8 ASET TETAP / FIXED ASSETS (/fixed-assets)
+--------------------------------------------------
+Mencatat barang milik perusahaan yang nilainya besar dan dipakai
+lebih dari 1 tahun (kendaraan, bangunan, peralatan, dst).
+- Saat dicatat, otomatis membuat jurnal perolehan: Debit Aset
+  Tetap, Kredit Kas/Bank (atau Utang jika kredit/cicilan).
+- Setiap aset SUSUT NILAINYA (depresiasi) tiap bulan, dihitung
+  dengan metode GARIS LURUS: (Harga Perolehan - Nilai Residu) /
+  Umur Ekonomis (bulan). Klik tombol "Jalankan Depresiasi Bulan
+  Ini" untuk posting jurnal: Debit Beban Depresiasi, Kredit
+  Akumulasi Depresiasi.
+- Nilai Buku = Harga Perolehan - Akumulasi Depresiasi (nilai aset
+  saat ini setelah dikurangi susut).
+
+2.9 ANGGARAN / BUDGETING (/budgets)
+----------------------------------------
+Rencana keuangan (anggaran) per akun Pendapatan/Beban untuk tiap
+bulan. Halaman utama membandingkan Anggaran vs Realisasi (angka
+aktual dari jurnal yang sudah posted), dengan indikator:
+- Hijau (favorable): realisasi lebih baik dari rencana
+- Merah (unfavorable): realisasi lebih buruk dari rencana
+  (contoh: beban aktual melebihi anggaran)
+
+2.10 LAPORAN KEUANGAN
+--------------------------
+a) Neraca Saldo / Trial Balance (/reports/trial-balance)
+   Daftar SEMUA akun dengan saldo debit/kredit per tanggal tertentu.
+   Total debit HARUS SAMA dengan total kredit - ini pembuktian
+   bahwa seluruh transaksi tercatat dengan benar (buku "balance").
+
+b) Laporan Laba Rugi / Income Statement (/reports/income-statement)
+   Pendapatan dikurangi Beban = Laba/Rugi Bersih, untuk satu
+   rentang periode (bulan/kuartal/tahun).
+
+c) Neraca / Balance Sheet (/reports/balance-sheet)
+   Posisi keuangan per satu tanggal tertentu. Rumus dasar:
+   ASET = KEWAJIBAN + EKUITAS
+   Kalau rumus ini tidak sama (tidak balance), berarti ada
+   kesalahan pencatatan di suatu tempat.
+
+d) Laporan Arus Kas / Cash Flow Statement (/reports/cash-flow)
+   Menjelaskan DARI MANA kas bertambah/berkurang, dibagi 3 kategori:
+   - Aktivitas Operasi (dari kegiatan usaha sehari-hari)
+   - Aktivitas Investasi (beli/jual aset tetap)
+   - Aktivitas Pendanaan (modal masuk, pinjaman, dst)
+   Dipakai metode TIDAK LANGSUNG (indirect method): mulai dari Laba
+   Bersih, lalu disesuaikan dengan item non-kas (depresiasi) dan
+   perubahan modal kerja.
+
+e) Rasio Keuangan (/reports/ratios)
+   Angka-angka kesehatan keuangan perusahaan:
+   - Current Ratio & Quick Ratio (likuiditas - kemampuan bayar
+     utang jangka pendek)
+   - Debt to Equity & Debt to Asset (solvabilitas - seberapa besar
+     ketergantungan pada utang)
+   - Net Profit Margin, ROA, ROE (profitabilitas - seberapa efisien
+     perusahaan menghasilkan laba)
+
+2.11 REKONSILIASI BANK (/bank-reconciliation)
+--------------------------------------------------
+Proses mencocokkan catatan Kas/Bank versi perusahaan (dari jurnal)
+dengan catatan versi bank (rekening koran). Pengguna mencentang
+transaksi yang sudah cocok, lalu sistem menghitung selisih antara
+saldo buku dan saldo rekening koran yang diinput manual.
+
+2.12 ROLES & PERMISSIONS (ditegakkan di server)
+----------------------------------------------------------------------
+3 role tersedia:
+- Manager (internal: admin): akses penuh + approve/void jurnal + kelola
+  pengguna + backup + pengaturan (Profil Perusahaan, Activity Log)
+- Staff: hak akses DIATUR PER ORANG oleh Manager (lihat 2.12c), mis.
+  Finance = piutang/utang/kas-bank/rekonsiliasi; Accounting = akun/jurnal/
+  posting/aset tetap/anggaran. Semua staf bisa melihat laporan.
+- Viewer: hanya melihat data & laporan
+Akun tanpa role tidak bisa membuka data keuangan sama sekali.
+
+2.12c KELOLA PENGGUNA (/admin/users, khusus Manager)
+----------------------------------------------------------------------
+Alur pendaftaran: daftar -> verifikasi email (OTP) -> status "Menunggu"
+-> Manager meninjau -> Disetujui / Ditolak. Email otomatis dikirim ke
+pendaftar (berisi role, posisi, hak akses, dan pesan dari Manager) dan ke
+Manager saat ada pendaftar baru. Selama menunggu, orang tsb tidak bisa
+login dan tidak dikirimi OTP login.
+Tab: Menunggu | Aktif | Nonaktif | Ditolak | Semua (+ pencarian).
+Aksi: Tinjau & setujui (pilih role, posisi Accounting/Finance/Pajak/
+Payroll/Lainnya, centang hak akses - otomatis terisi preset posisi),
+Tolak (alasan wajib), Atur akses, Nonaktifkan / Aktifkan (langsung
+berlaku, termasuk yang sedang login), Pesan (kirim email bebas ke orang
+tsb lewat Gmail sistem). Semua aksi tercatat di Activity Log.
+Pengaman: tidak bisa menonaktifkan diri sendiri; Manager aktif terakhir
+tidak bisa dinonaktifkan/diturunkan.
+
+2.12e PERIODE AKUNTANSI (/admin/periods, khusus Manager)
+----------------------------------------------------------------------
+Tutup bulan setelah laporannya final. Jurnal bertanggal di bulan
+tertutup tidak bisa dibuat/diubah/diposting/di-void, termasuk yang
+dibuat otomatis dari invoice/bill/pembayaran/aset tetap. Hanya bisa
+ditutup bila tidak ada jurnal draft di bulan itu. Buka kembali wajib
+alasan (tercatat di Activity Log).
+
+2.12f LAMPIRAN BUKTI TRANSAKSI
+----------------------------------------------------------------------
+Di halaman detail Jurnal, Invoice, dan Bill ada panel unggah foto nota
+/ PDF (maks 5MB, foto dikecilkan otomatis). Hanya bisa dibuka lewat
+aplikasi (harus login). Manager atau pengunggahnya sendiri yang bisa
+menghapus.
+
+2.12g EKSPOR EXCEL
+----------------------------------------------------------------------
+Tombol "Unduh Excel" di Neraca Saldo, Laba Rugi, dan Neraca (di samping
+tombol PDF).
+
+2.12d BACKUP DATA (/admin/backup, khusus Manager)
+----------------------------------------------------------------------
+Buat, unduh, hapus file backup .sql. Memakai mysqldump/pg_dump bila ada
+(backup lengkap) atau mode PHP (data saja; MySQL & PostgreSQL). Simpan
+N file terbaru. CLI: php artisan mkp:backup (bisa dijadwalkan). Restore
+dilakukan manual (lihat README, "Backup & restore") - sengaja tidak ada
+tombol restore di web.
+
+2.12b PROFIL SAYA (/profile) - klik foto/nama di pojok kiri bawah
+----------------------------------------------------------------------
+Setiap pengguna dapat mengubah: nama, username, email, telepon, tanggal
+lahir, NIP, jabatan, divisi, alamat, bio, riwayat pendidikan (beberapa
+baris: jenjang, institusi, jurusan, tahun), foto profil, dan password.
+- Mengganti email membutuhkan password saat ini (email = tujuan OTP login).
+- Foto: pilih file -> atur zoom & posisi di dalam bingkai -> Simpan.
+  Klik foto untuk membuka penampil layar penuh dengan zoom (roda mouse,
+  tombol +/-, klik dua kali, seret untuk menggeser, Esc untuk menutup).
+- Foto disimpan di storage/app/private/avatars (tanpa storage:link).
+
+2.13 PROFIL PERUSAHAAN (/settings/company)
+------------------------------------------------
+Data identitas perusahaan (nama, NPWP, alamat, kontak) yang dipakai
+sebagai kop surat otomatis di PDF Invoice yang dikirim ke pelanggan.
+
+2.14 UNDUH PDF INVOICE
+--------------------------
+Di halaman detail Invoice ada tombol "⬇ Unduh PDF" - menghasilkan
+dokumen invoice profesional siap kirim ke pelanggan, lengkap dengan
+kop surat perusahaan, rincian item, status pembayaran, dan sisa tagihan.
+
+2.15 ACTIVITY LOG / AUDIT TRAIL (/settings/activity-log, admin only)
+--------------------------------------------------------------------------
+Mencatat OTOMATIS setiap aksi penting di sistem: siapa melakukan apa,
+kapan, dari IP mana. Termasuk: login berhasil/gagal, register, posting/
+void/approve/reject jurnal, buat/void invoice & bill, catat pembayaran,
+hubungkan/putuskan akun Gmail. Bisa difilter per jenis aksi atau dicari
+berdasarkan kata kunci di deskripsi. Ini pelengkap penting untuk kontrol
+internal - kalau ada transaksi mencurigakan, bisa ditelusuri siapa
+pelakunya dan kapan terjadi.
+
+2.16 NOTIFIKASI (bel di navbar)
+------------------------------------
+Ikon lonceng di pojok kanan atas menampilkan ringkasan hal yang perlu
+perhatian: jurnal menunggu approval, invoice/bill lewat jatuh tempo,
+invoice/bill akan jatuh tempo, jurnal draft yang belum diposting.
+Diperbarui otomatis tiap 60 detik.
+
+2.17 MODE GELAP (Dark Mode)
+--------------------------------
+Ikon matahari/bulan di navbar untuk beralih antara tampilan terang dan
+gelap. Preferensi tersimpan di browser (localStorage), jadi tidak perlu
+diatur ulang setiap kali buka aplikasi.
+
+
+BAGIAN 3: KONSEP AKUNTANSI DASAR YANG DIPAKAI APLIKASI INI
+====================================================================
+
+3.1 DOUBLE-ENTRY BOOKKEEPING (Pembukuan Berpasangan)
+---------------------------------------------------------
+Prinsip inti seluruh akuntansi modern: SETIAP transaksi keuangan
+dicatat di DUA SISI - Debit dan Kredit - dengan jumlah yang SAMA.
+Contoh: perusahaan menerima kas Rp1.000.000 dari penjualan:
+  Debit  Kas                Rp1.000.000
+  Kredit Pendapatan Penjualan          Rp1.000.000
+Karena selalu berpasangan dan seimbang, total Debit di seluruh
+sistem akan SELALU SAMA dengan total Kredit - inilah yang
+diverifikasi di Neraca Saldo.
+
+3.2 SALDO NORMAL (Normal Balance)
+--------------------------------------
+Setiap jenis akun punya "arah" penambahan saldo yang berbeda:
+  Aset      -> bertambah di sisi DEBIT
+  Beban     -> bertambah di sisi DEBIT
+  Kewajiban -> bertambah di sisi KREDIT
+  Ekuitas   -> bertambah di sisi KREDIT
+  Pendapatan-> bertambah di sisi KREDIT
+Mnemonic yang sering dipakai: "ADE-KKP" atau ingat singkatan
+bahasa Inggris "DEAD CLIC" (Debit: Expense, Asset, Drawing |
+Credit: Liability, Income, Capital).
+
+3.3 SIKLUS AKUNTANSI (Accounting Cycle) di aplikasi ini
+--------------------------------------------------------------
+1. Transaksi terjadi (penjualan, pembelian, pembayaran, dst)
+2. Dicatat sebagai Jurnal (otomatis oleh modul AR/AP/Aset Tetap,
+   atau manual lewat Jurnal Umum)
+3. Diposting ke Buku Besar (mengelompokkan per akun)
+4. Disusun Neraca Saldo (memastikan Debit = Kredit)
+5. Disusun Laporan Keuangan (Laba Rugi, Neraca, Arus Kas)
+6. (Di dunia nyata, ada langkah "tutup buku" di akhir periode -
+   belum diimplementasikan di aplikasi ini)
+
+3.4 KENAPA TRANSAKSI YANG SUDAH POSTED TIDAK BOLEH DIEDIT?
+------------------------------------------------------------------
+Ini prinsip AUDIT TRAIL. Bayangkan kalau siapa saja bisa mengubah
+diam-diam jurnal yang sudah tercatat - laporan keuangan jadi tidak
+bisa dipercaya sama sekali (rawan manipulasi/fraud). Karena itu,
+begitu jurnal diposting, cara memperbaiki kesalahan adalah dengan
+membuat JURNAL PEMBALIK (reversing entry) yang menetralisir jurnal
+salah tadi, lalu mencatat jurnal yang benar sebagai transaksi baru.
+Jejak keduanya (yang salah dan koreksinya) tetap terlihat selamanya.
+
+
+BAGIAN 4: CATATAN KEAMANAN
+====================================================================
+Sudah otomatis aktif berkat Laravel + custom yang dibangun:
+- Password di-hash dengan Argon2id (bukan bcrypt; akun lama otomatis dimigrasi saat login), tidak pernah disimpan polos
+- Proteksi CSRF di semua form
+- Proteksi SQL Injection (lewat Eloquent ORM, bukan raw query)
+- Mass assignment protection ($fillable di tiap model)
+- Sesi login diregenerasi otomatis saat login/2FA sukses (cegah session
+  fixation attack)
+- Rate limiting percobaan login (5x/15 menit) dan register (8x/jam)
+- Verifikasi 2 langkah (2FA) via kode email untuk Login DAN Register
+- Token OAuth Gmail tersimpan terenkripsi di database, bukan file polos
+- Halaman pengaturan Gmail admin-only (middleware role:admin)
+- Pendaftaran publik ditutup default; izin per role ditegakkan per route
+
+Perlu disiapkan manual sebelum dipakai produksi sungguhan:
+- Aktifkan HTTPS (SSL certificate) di server
+- Set APP_DEBUG=false di .env produksi (supaya pesan error detail
+  tidak bocor ke publik)
+- Selesaikan setup Gmail API (lihat README) - tanpa ini, 2FA/register/
+  reset password tidak akan bisa mengirim email sama sekali
+- Kalau app Google Cloud Console masih status "Testing", ajukan App
+  Verification supaya refresh_token tidak kedaluwarsa tiap 7 hari
+- Backup database rutin, dan folder storage/app/private (foto profil & logo)
+- Simpan credentials.json / token.json di tempat aman; jangan dibagikan
+
+
+====================================================================
+Dokumen ini dibuat otomatis sebagai bagian dari proyek MKP.
+Update terakhir: mengikuti kondisi kode per sesi pengembangan ini.
+====================================================================

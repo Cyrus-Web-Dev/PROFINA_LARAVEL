@@ -1,0 +1,252 @@
+--- a/.env.example
++++ b/.env.example
+@@ -140,3 +140,12 @@
+ SDM_ADMIN_PASSWORD=
+ 
+ VITE_APP_NAME="${APP_NAME}"
++
++# --- Integrasi Payroll (PAYBRIDGE) ---
++# Rahasia webhook PAYBRIDGE -> SDM (tampil sekali di PAYBRIDGE > Integrasi API saat klien "SDM" dibuat)
++PAYROLL_WEBHOOK_SECRET=
++PAYROLL_PORTAL_URL=http://127.0.0.1:8003
++# true = kunci modul payroll bawaan SDM (dialihkan ke PAYBRIDGE). Aktifkan SETELAH PAYBRIDGE berjalan.
++SDM_PAYROLL_EXTERNAL=false
++# true = hari kerja tanpa catatan absensi dihitung alpha. Default false (aman bila absensi belum dipakai penuh).
++SDM_COUNT_UNRECORDED_AS_ALPHA=false
+--- a/app/Http/Controllers/PayrollController.php
++++ b/app/Http/Controllers/PayrollController.php
+@@ -25,6 +25,7 @@
+     public function index()
+     {
+         return Inertia::render('Payroll/Index', [
++            'external' => (bool) config('hr.payroll.external'),
+             'periods' => PayrollPeriod::withCount('items')
+                 ->orderByDesc('period_year')->orderByDesc('period_month')
+                 ->get()
+@@ -40,6 +41,10 @@
+ 
+     public function store(Request $request)
+     {
++        if (config('hr.payroll.external')) {
++            return back()->with('error', 'Modul payroll SDM dialihkan ke PAYBRIDGE. Hitung, setujui, dan bayar gaji di sana.');
++        }
++
+         $data = $request->validate([
+             'period_month' => 'required|integer|between:1,12',
+             'period_year' => 'required|integer|between:2020,2100',
+@@ -72,6 +77,10 @@
+      */
+     public function process(PayrollPeriod $payrollPeriod, PayrollCalculator $calculator)
+     {
++        if (config('hr.payroll.external')) {
++            return back()->with('error', 'Modul payroll SDM dialihkan ke PAYBRIDGE. Hitung, setujui, dan bayar gaji di sana.');
++        }
++
+         if ($payrollPeriod->status !== 'draft') {
+             return back()->with('error', 'Periode ini sudah diproses/dibayar dan tidak bisa dihitung ulang.');
+         }
+@@ -103,6 +112,10 @@
+     /** Koreksi manual satu item sebelum ditandai lunas (mis. tambah tunjangan lembur). */
+     public function updateItem(Request $request, PayrollItem $payrollItem)
+     {
++        if (config('hr.payroll.external')) {
++            return back()->with('error', 'Modul payroll SDM dialihkan ke PAYBRIDGE. Hitung, setujui, dan bayar gaji di sana.');
++        }
++
+         abort_if($payrollItem->period->status === 'paid', 403, 'Periode sudah dibayar, tidak bisa diubah.');
+ 
+         $data = $request->validate([
+@@ -134,6 +147,10 @@
+     /** Tandai seluruh periode sudah dibayar (mengunci semua item). */
+     public function markPaid(PayrollPeriod $payrollPeriod)
+     {
++        if (config('hr.payroll.external')) {
++            return back()->with('error', 'Modul payroll SDM dialihkan ke PAYBRIDGE. Hitung, setujui, dan bayar gaji di sana.');
++        }
++
+         if ($payrollPeriod->status !== 'processed') {
+             return back()->with('error', 'Periode harus diproses terlebih dahulu sebelum ditandai lunas.');
+         }
+--- a/app/Providers/AppServiceProvider.php
++++ b/app/Providers/AppServiceProvider.php
+@@ -20,6 +20,10 @@
+ 
+     public function boot(): void
+     {
++        // Jembatan SDM -> PAYBRIDGE: kabari Payroll saat data karyawan/gaji berubah.
++        \App\Models\Employee::observe(\App\Observers\EmployeePayrollObserver::class);
++        RateLimiter::for('payroll-api', fn (Request $r) => Limit::perMinute((int) config('hr.payroll.api_rate_limit', 120))->by($r->bearerToken() ? substr(hash('sha256', $r->bearerToken()), 0, 16) : $r->ip()));
++
+         // Kebijakan password minimum di SELURUH aplikasi (registrasi, reset, ganti password):
+         // minimal 8 karakter, campuran huruf besar/kecil, ada angka, dan dicek terhadap daftar
+         // password yang pernah bocor (Have I Been Pwned, lewat k-anonymity - tidak mengirim
+--- a/bootstrap/app.php
++++ b/bootstrap/app.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use App\Http\Middleware\AuthenticateIntegrationClient;
+ use App\Http\Middleware\EnsureUserHasRole;
+ use App\Http\Middleware\EnsureUserIsActive;
+ use App\Http\Middleware\ForceHttps;
+@@ -39,6 +40,7 @@
+             'permission' => PermissionMiddleware::class,
+             'role_or_permission' => RoleOrPermissionMiddleware::class,
+             'has.role' => EnsureUserHasRole::class,
++            'integration.client' => AuthenticateIntegrationClient::class,
+         ]);
+     })
+     ->withExceptions(function (Exceptions $exceptions) {
+--- a/config/hr.php
++++ b/config/hr.php
+@@ -136,4 +136,20 @@
+         'mysqldump_path' => env('SDM_MYSQLDUMP_PATH'),
+     ],
+ 
++    /*
++    |--------------------------------------------------------------------------
++    | Integrasi Payroll (PAYBRIDGE)
++    |--------------------------------------------------------------------------
++    | external=true : modul payroll bawaan SDM DIKUNCI (hitung/lunas/ubah item dinonaktifkan); gaji dihitung & disetujui di PAYBRIDGE.
++    |                 Data lama tetap bisa dilihat. Aktifkan setelah PAYBRIDGE berjalan.
++    */
++    'payroll' => [
++        'external' => (bool) env('SDM_PAYROLL_EXTERNAL', false),
++        'webhook_secret' => env('PAYROLL_WEBHOOK_SECRET'),   // rahasia HMAC webhook PAYBRIDGE -> SDM
++        'portal_url' => env('PAYROLL_PORTAL_URL'),            // mis. http://127.0.0.1:8003
++        'count_unrecorded_as_alpha' => (bool) env('SDM_COUNT_UNRECORDED_AS_ALPHA', false),
++        'api_rate_limit' => (int) env('SDM_PAYROLL_API_RATE_LIMIT', 120),
++        'webhook_timeout' => (int) env('SDM_PAYROLL_WEBHOOK_TIMEOUT', 8),
++    ],
++
+ ];
+--- a/database/seeders/RolePermissionSeeder.php
++++ b/database/seeders/RolePermissionSeeder.php
+@@ -26,6 +26,7 @@
+         'holidays' => ['view', 'manage'], // hari libur perusahaan (melengkapi data libur nasional dari API)
+         'reports' => ['view', 'export'],
+         'users' => ['view', 'manage'], // kelola akun login & role
++        'integrations' => ['manage'], // klien API & webhook (PAYBRIDGE) - hanya super-admin
+         'settings' => ['manage'],
+     ];
+ 
+@@ -47,7 +48,7 @@
+ 
+         // hr-admin: mengelola operasional HR sehari-hari, TIDAK termasuk pengaturan sistem.
+         $hrAdmin = Role::firstOrCreate(['name' => 'hr-admin', 'guard_name' => 'web']);
+-        $hrAdmin->syncPermissions(array_filter($permissions, fn ($p) => ! str_starts_with($p, 'settings.')));
++        $hrAdmin->syncPermissions(array_filter($permissions, fn ($p) => ! str_starts_with($p, 'settings.') && ! str_starts_with($p, 'integrations.')));
+ 
+         // manajer: melihat/menilai/menyetujui HANYA tim bawahannya (pembatasan tim dilakukan di controller
+         // lewat App\Support\TeamScope, BUKAN dari permission ini). TIDAK boleh melihat gaji/payroll &
+--- a/resources/js/Layouts/AppLayout.vue
++++ b/resources/js/Layouts/AppLayout.vue
+@@ -37,6 +37,7 @@
+   { name: 'Cuti & Izin', href: route('leaves.index'), show: has('leaves.view'), icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+   { name: 'Hari Libur', href: route('holidays.index'), show: has('holidays.view'), icon: 'M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 1H21l-3 6 3 6h-8.5l-1-1H5a2 2 0 00-2 2zm9-13.5V9' },
+   { name: 'Payroll', href: route('payroll.index'), show: has('payroll.view'), icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-9c-1.11 0-2.08.402-2.599 1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
++  { name: 'Integrasi Payroll', href: route('integrations.payroll'), show: has('integrations.manage'), icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' },
+   { name: 'Kinerja / KPI', href: route('performance.index'), show: has('performance.view'), icon: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6' },
+   { name: 'Rekrutmen', href: route('recruitment.index'), show: has('recruitment.view'), icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },
+   { name: 'Pelatihan', href: route('trainings.index'), show: has('trainings.view'), icon: 'M12 14l9-5-9-5-9 5 9 5zm0 0l6.16-3.422A12.083 12.083 0 0112 21a12.083 12.083 0 01-6.16-10.422L12 14z' },
+@@ -48,6 +49,7 @@
+   { name: 'Absen Saya', href: route('attendances.my-history'), icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
+   { name: 'Cuti Saya', href: route('leaves.mine'), icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+   { name: 'Slip Gaji Saya', href: route('payroll.mine'), icon: 'M9 14l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
++  { name: 'Slip Gaji (Payroll)', href: route('payroll.mine-external'), icon: 'M9 14l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
+   { name: 'Penilaian Saya', href: route('performance.mine'), icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10' },
+   { name: 'Pelatihan Saya', href: route('trainings.mine'), icon: 'M12 14l9-5-9-5-9 5 9 5z' },
+ ])
+--- a/resources/js/Pages/Payroll/Index.vue
++++ b/resources/js/Pages/Payroll/Index.vue
+@@ -3,7 +3,7 @@
+ import AppLayout from '@/Layouts/AppLayout.vue'
+ import { Head, Link, useForm } from '@inertiajs/vue3'
+ 
+-defineProps({ periods: Array })
++defineProps({ periods: Array, external: Boolean })
+ 
+ const showForm = ref(false)
+ const form = useForm({ period_month: new Date().getMonth() + 1, period_year: new Date().getFullYear() })
+@@ -19,6 +19,9 @@
+   <AppLayout>
+     <Head title="Payroll" />
+     <template #title>Payroll</template>
++    <div v-if="external" class="mb-4 rounded-md border border-seal-300 bg-seal-50 px-4 py-3 text-sm text-seal-900">
++      Modul payroll SDM sudah <b>dialihkan ke PAYBRIDGE</b>. Data periode lama tetap bisa dilihat, tetapi menghitung, mengubah, dan menandai lunas dinonaktifkan.
++    </div>
+     <template #actions>
+       <button @click="showForm = !showForm" class="btn-accent btn-sm">{{ showForm ? 'Batal' : '+ Periode Baru' }}</button>
+     </template>
+--- a/routes/api.php
++++ b/routes/api.php
+@@ -5,7 +5,9 @@
+ use App\Http\Controllers\Api\AuthController;
+ use App\Http\Controllers\Api\EmployeeController;
+ use App\Http\Controllers\Api\LeaveController;
++use App\Http\Controllers\Api\PayrollApiController;
+ use App\Http\Controllers\Api\PayrollController;
++use App\Http\Controllers\Api\PayrollWebhookController;
+ use Illuminate\Support\Facades\Route;
+ 
+ /*
+@@ -50,3 +52,23 @@
+         Route::get('/announcements', [AnnouncementController::class, 'index'])->name('announcements.index');
+     });
+ });
++
++/*
++| REST API untuk PAYBRIDGE (Payroll & Budgeting) - auth: token klien integrasi (bukan Sanctum user).
++| Dokumentasi: docs/INTEGRASI-PAYBRIDGE.md
++*/
++Route::prefix('payroll/v1')->middleware(['throttle:payroll-api'])->group(function () {
++    Route::middleware('integration.client')->get('/ping', [PayrollApiController::class, 'ping']);
++    Route::middleware('integration.client:employees:read')->group(function () {
++        Route::get('/employees', [PayrollApiController::class, 'employees']);
++        Route::get('/employees/{nip}', [PayrollApiController::class, 'employee']);
++        Route::get('/departments', [PayrollApiController::class, 'departments']);
++    });
++    Route::middleware('integration.client:attendance:read')->group(function () {
++        Route::get('/attendance-summary', [PayrollApiController::class, 'attendanceSummary']);
++        Route::get('/holidays', [PayrollApiController::class, 'holidays']);
++    });
++});
++
++// Webhook dari PAYBRIDGE: tanpa sesi/CSRF; keamanan lewat tanda tangan HMAC.
++Route::post('/payroll/webhook', PayrollWebhookController::class)->middleware('throttle:240,1')->name('payroll.webhook');
+--- a/routes/console.php
++++ b/routes/console.php
+@@ -14,3 +14,6 @@
+ 
+ // Backup database PostgreSQL setiap hari jam 02:00 WIB (lihat app/Console/Commands/BackupDatabase.php).
+ Schedule::command('sdm:backup-database')->dailyAt('02:00');
++
++// Kirim ulang webhook ke PAYBRIDGE yang tertunda.
++Schedule::command('sdm:integration-retry')->everyFiveMinutes()->withoutOverlapping();
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -9,6 +9,7 @@
+ use App\Http\Controllers\EmployeeDocumentController;
+ use App\Http\Controllers\LeaveController;
+ use App\Http\Controllers\PayrollController;
++use App\Http\Controllers\PayrollIntegrationController;
+ use App\Http\Controllers\PerformanceController;
+ use App\Http\Controllers\ProfileController;
+ use App\Http\Controllers\RecruitmentController;
+@@ -139,6 +140,16 @@
+     Route::delete('/documents/{document}', [EmployeeDocumentController::class, 'destroy'])->name('documents.destroy');
+     Route::get('/documents/{document}/download', [EmployeeDocumentController::class, 'download'])->name('documents.download');
+ 
++    // --- Integrasi Payroll (PAYBRIDGE) ---
++    Route::get('/integrations/payroll', [PayrollIntegrationController::class, 'index'])->name('integrations.payroll');
++    Route::post('/integrations/payroll/clients', [PayrollIntegrationController::class, 'store'])->name('integrations.payroll.store');
++    Route::put('/integrations/payroll/clients/{client}', [PayrollIntegrationController::class, 'update'])->name('integrations.payroll.update');
++    Route::post('/integrations/payroll/clients/{client}/rotate', [PayrollIntegrationController::class, 'rotate'])->name('integrations.payroll.rotate');
++    Route::post('/integrations/payroll/clients/{client}/ping', [PayrollIntegrationController::class, 'ping'])->name('integrations.payroll.ping');
++    Route::delete('/integrations/payroll/clients/{client}', [PayrollIntegrationController::class, 'destroy'])->name('integrations.payroll.destroy');
++    Route::post('/integrations/payroll/deliveries/{delivery}/resend', [PayrollIntegrationController::class, 'resend'])->name('integrations.payroll.resend');
++    Route::get('/my/payslips-payroll', [PayrollIntegrationController::class, 'mine'])->name('payroll.mine-external');
++
+     // --- Backup Database (super-admin/hr-admin saja, lihat RolePermissionSeeder) ---
+     Route::get('/settings/backup', [\App\Http\Controllers\BackupController::class, 'index'])->name('backup.index');
+     Route::post('/settings/backup', [\App\Http\Controllers\BackupController::class, 'store'])->name('backup.store');

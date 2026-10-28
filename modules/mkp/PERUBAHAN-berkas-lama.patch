@@ -1,0 +1,107 @@
+--- a/.env.example
++++ b/.env.example
+@@ -78,3 +78,12 @@
+ PROCURA_TIMEOUT=10
+ # Keputusan setuju >= nilai ini wajib oleh pemegang hak "Setujui jurnal bernilai besar" (bawaan = MKP_APPROVAL_THRESHOLD)
+ # PROCURA_APPROVAL_THRESHOLD=50000000
++
++# --- Integrasi PAYBRIDGE (Payroll & Budgeting) ---
++# Dibuat di PAYBRIDGE > Integrasi API > klien tipe "Keuangan" (token & rahasia tampil sekali).
++PAYROLL_URL=http://127.0.0.1:8003/api/v1
++PAYROLL_TOKEN=
++PAYROLL_WEBHOOK_SECRET=
++PAYROLL_APPROVAL_THRESHOLD=50000000
++# true = anggaran SDM aktif dari PAYBRIDGE otomatis ditulis ke modul Anggaran.
++PAYROLL_AUTO_APPLY_BUDGET=true
+--- a/config/mkp.php
++++ b/config/mkp.php
+@@ -25,7 +25,7 @@
+     // Manager tetap bisa menambah/mengurangi centangnya per orang. (reports.view selalu ada.)
+     'positions' => [
+         'accounting' => ['label' => 'Accounting', 'permissions' => ['coa.manage', 'journal.create', 'journal.post', 'fixed-asset.manage', 'budget.manage']],
+-        'finance' => ['label' => 'Finance', 'permissions' => ['ar.manage', 'ap.manage', 'cashbank.manage', 'bank-reconciliation.manage', 'procurement.decide', 'procurement.disburse']],
++        'finance' => ['label' => 'Finance', 'permissions' => ['ar.manage', 'ap.manage', 'cashbank.manage', 'bank-reconciliation.manage', 'procurement.decide', 'procurement.disburse', 'payroll.decide', 'payroll.disburse']],
+         'pajak' => ['label' => 'Pajak', 'permissions' => ['journal.create']],
+         'payroll' => ['label' => 'Payroll', 'permissions' => ['journal.create']],
+         'lainnya' => ['label' => 'Lainnya', 'permissions' => []],
+@@ -46,6 +46,8 @@
+         'bank-reconciliation.manage' => 'Rekonsiliasi bank',
+         'procurement.decide' => 'Putuskan pengajuan dana dari Pengadaan',
+         'procurement.disburse' => 'Cairkan dana & terima LPJ Pengadaan',
++        'payroll.decide' => 'Putuskan pengajuan dana gaji dari Payroll (jurnal akrual)',
++        'payroll.disburse' => 'Cairkan gaji & setor pajak/BPJS dari Payroll',
+     ],
+ 
+     'backup' => [
+--- a/database/seeders/RolePermissionSeeder.php
++++ b/database/seeders/RolePermissionSeeder.php
+@@ -19,7 +19,7 @@
+         $permissions = [
+             'coa.manage', 'journal.create', 'journal.post', 'journal.void', 'journal.approve',
+             'ar.manage', 'ap.manage', 'cashbank.manage', 'fixed-asset.manage', 'budget.manage',
+-            'bank-reconciliation.manage', 'procurement.decide', 'procurement.disburse', 'reports.view', 'users.manage',
++            'bank-reconciliation.manage', 'procurement.decide', 'procurement.disburse', 'payroll.decide', 'payroll.disburse', 'reports.view', 'users.manage',
+         ];
+         foreach ($permissions as $p) {
+             Permission::firstOrCreate(['name' => $p]);
+--- a/resources/js/Layouts/AppLayout.vue
++++ b/resources/js/Layouts/AppLayout.vue
+@@ -84,6 +84,7 @@
+   { name: 'Vendor', href: route('vendors.index'), icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4' },
+   { name: 'Kas & Bank', href: route('cashbank.index'), icon: 'M2 8h20M2 8v10a2 2 0 002 2h16a2 2 0 002-2V8M2 8l2-4h16l2 4M8 14h.01M12 14h4' },
+   { name: 'Dana Pengadaan', badge: 'procurement', href: route('procurement.index'), icon: 'M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0zM13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1' },
++  { name: 'Dana Payroll', href: route('payroll.index'), icon: 'M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z' },
+   { name: 'Aset Tetap', href: route('fixed-assets.index'), icon: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0H5m14 0h2M5 21H3m4-14h6m-6 4h6m-6 4h6' },
+   { name: 'Anggaran', href: route('budgets.index'), icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2' },
+   { name: 'Neraca Saldo', href: route('reports.trial-balance'), icon: 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2' },
+--- a/routes/api.php
++++ b/routes/api.php
+@@ -1,7 +1,9 @@
+ <?php
+ 
++use App\Http\Controllers\Api\PayrollWebhookController;
+ use App\Http\Controllers\Api\ProcuraWebhookController;
+ use Illuminate\Support\Facades\Route;
+ 
+ // Webhook dari PROCURA. Tanpa sesi/CSRF; keamanan lewat tanda tangan HMAC (lihat controller).
+ Route::post('/procura/webhook', ProcuraWebhookController::class)->middleware('throttle:120,1')->name('procura.webhook');
++Route::post('/payroll/webhook', PayrollWebhookController::class)->middleware('throttle:120,1')->name('payroll.webhook');
+--- a/routes/console.php
++++ b/routes/console.php
+@@ -9,3 +9,6 @@
+ 
+ // Pelengkap webhook PROCURA: tarik pengajuan dana tiap 10 menit (butuh `php artisan schedule:work` atau cron `schedule:run`).
+ \Illuminate\Support\Facades\Schedule::command('procura:sync')->everyTenMinutes()->withoutOverlapping();
++
++// Sinkron cadangan pengajuan dana gaji & setoran dari PAYBRIDGE bila webhook terlewat.
++\Illuminate\Support\Facades\Schedule::command('payroll:sync')->everyTenMinutes()->withoutOverlapping();
+--- a/routes/web.php
++++ b/routes/web.php
+@@ -14,6 +14,7 @@
+ use App\Http\Controllers\FixedAssetController;
+ use App\Http\Controllers\InvoiceController;
+ use App\Http\Controllers\JournalController;
++use App\Http\Controllers\PayrollFundingController;
+ use App\Http\Controllers\ProcurementFundingController;
+ use App\Http\Controllers\ProfileController;
+ use App\Http\Controllers\LedgerController;
+@@ -121,6 +122,19 @@
+         Route::post('/{funding}/settle', [ProcurementFundingController::class, 'settle'])->whereNumber('funding')->middleware('permission:procurement.disburse')->name('settle');
+     });
+ 
++    // Modul Dana Payroll (terhubung ke PAYBRIDGE lewat REST API + webhook)
++    Route::prefix('payroll-funds')->name('payroll.')->group(function () {
++        Route::get('/', [PayrollFundingController::class, 'index'])->name('index');
++        Route::get('/{funding}', [PayrollFundingController::class, 'show'])->whereNumber('funding')->name('show');
++        Route::middleware('permission:payroll.decide|payroll.disburse')->group(function () {
++            Route::post('/sync', [PayrollFundingController::class, 'sync'])->middleware('throttle:20,1')->name('sync');
++            Route::post('/{funding}/refresh', [PayrollFundingController::class, 'refresh'])->whereNumber('funding')->middleware('throttle:30,1')->name('refresh');
++        });
++        Route::post('/{funding}/decide', [PayrollFundingController::class, 'decide'])->whereNumber('funding')->middleware('permission:payroll.decide')->name('decide');
++        Route::post('/{funding}/disburse', [PayrollFundingController::class, 'disburse'])->whereNumber('funding')->middleware('permission:payroll.disburse')->name('disburse');
++        Route::post('/remittances/{remittance}/pay', [PayrollFundingController::class, 'payRemittance'])->whereNumber('remittance')->middleware('permission:payroll.disburse')->name('remittance.pay');
++    });
++
+     // Modul Aset Tetap
+     Route::get('/fixed-assets', [FixedAssetController::class, 'index'])->name('fixed-assets.index');
+     Route::get('/fixed-assets/create', [FixedAssetController::class, 'create'])->middleware('permission:fixed-asset.manage')->name('fixed-assets.create');

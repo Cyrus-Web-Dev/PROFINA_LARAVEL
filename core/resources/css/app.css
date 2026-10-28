@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-paper text-ink-900;
+  }
+  html.dark {
+    @apply bg-ink-950 text-ink-100;
+  }
+  body {
+    min-height: 100vh;
+  }
+  h1, h2, h3, h4 {
+    @apply font-serif;
+  }
+  ::selection {
+    @apply bg-seal-200 text-ink-900;
+  }
+  /* Angka & data tabular selalu monospace supaya rapi rata kanan */
+  .tabular, td.num, .num {
+    @apply font-mono tabular-nums;
+  }
+}
+
+@layer components {
+  /* Kartu bergaya "kartu arsip kepegawaian": tepi tegas, bukan shadow lembut generik SaaS */
+  .card {
+    @apply bg-white dark:bg-ink-900 border border-ink-200 dark:border-ink-800 rounded-md shadow-card;
+  }
+  .card-header {
+    @apply px-5 py-4 border-b border-ink-100 dark:border-ink-800 flex items-center justify-between gap-3;
+  }
+  .card-body {
+    @apply p-5;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium
+      transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+      disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-ink-900 text-paper hover:bg-ink-800 focus-visible:ring-ink-700
+      dark:bg-seal-500 dark:text-ink-950 dark:hover:bg-seal-400;
+  }
+  .btn-accent {
+    @apply btn bg-seal-500 text-ink-950 hover:bg-seal-400 focus-visible:ring-seal-600;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-ink-800 border border-ink-300 hover:bg-ink-50 focus-visible:ring-ink-400
+      dark:bg-ink-900 dark:text-ink-100 dark:border-ink-700 dark:hover:bg-ink-800;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-500 focus-visible:ring-red-500;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-ink-600 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-800;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  .input {
+    @apply block w-full rounded-md border-ink-300 bg-white text-ink-900 shadow-sm
+      focus:border-seal-500 focus:ring-seal-500 text-sm
+      dark:bg-ink-900 dark:border-ink-700 dark:text-ink-100;
+  }
+  .label {
+    @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400 mb-1.5;
+  }
+  .error-text {
+    @apply text-xs text-red-600 mt-1;
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .badge-green { @apply badge bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300; }
+  .badge-amber { @apply badge bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300; }
+  .badge-red { @apply badge bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300; }
+  .badge-slate { @apply badge bg-ink-100 text-ink-700 dark:bg-ink-800 dark:text-ink-300; }
+  .badge-seal { @apply badge bg-seal-100 text-seal-800 dark:bg-seal-900/40 dark:text-seal-300; }
+
+  table.data-table {
+    @apply w-full text-sm border-collapse;
+  }
+  table.data-table th {
+    @apply text-left text-xs font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400
+      px-4 py-3 border-b border-ink-200 dark:border-ink-800;
+  }
+  table.data-table td {
+    @apply px-4 py-3 border-b border-ink-100 dark:border-ink-800/60;
+  }
+  table.data-table tbody tr:hover {
+    @apply bg-ink-50 dark:bg-ink-800/40;
+  }
+}
